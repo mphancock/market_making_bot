@@ -15,14 +15,16 @@ use solana_sdk::pubkey::Pubkey;
 use std::env;
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
+
 use utils::{
-    display_position_balances, display_wallet_balances, fetch_mint, fetch_position, fetch_whirlpool,
+    display_position_balances, display_wallet_balances, fetch_mint, fetch_position, fetch_whirlpool, send_transaction
 };
 
 use orca_whirlpools::{
-    close_position_instructions, open_position_instructions, IncreaseLiquidityParam,
+    close_position_instructions, open_position_instructions, open_full_range_position_instructions, IncreaseLiquidityParam
 };
 
+use solana_sdk::signer::Signer;
 
 #[tokio::main]
 async fn main() {
@@ -90,32 +92,124 @@ async fn main() {
     .await
     .expect("Failed to display position balances.");
 
-    let whirlpool_pubkey = Pubkey::from_str("8wXA3oeY8EUpmHu2yqzr6k2WJEodTFLuKqTmoQJtM6wP").unwrap();
-    let lower_price = 0.6;
-    let upper_price = 0.61;
 
-    // let liquidity_delta = convert_to_liquidity_delta(1, true)?;
-    // let param = IncreaseLiquidityParam::TokenB(1);
-    let param = IncreaseLiquidityParam::TokenB(1);
+    set_whirlpools_config_address(WhirlpoolsConfigInput::SolanaDevnet).unwrap();
+    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
+    // let wallet = load_wallet();
+    let whirlpool_address = Pubkey::from_str("8wXA3oeY8EUpmHu2yqzr6k2WJEodTFLuKqTmoQJtM6wP").unwrap();
+    let param = IncreaseLiquidityParam::TokenA(1);
 
-    let slippage_tolerance_bps = Some(100);
-
-    // let wallet = Keypair::new();
-    // let funder = Some(wallet.pubkey());
-    // funder = Some(wallet.pubkey());
-    let wallet_pub_key = wallet.pubkey();
-    let result = open_position_instructions(
+    let instructions = open_full_range_position_instructions(
         &rpc,
-        whirlpool_pubkey,
-        lower_price,
-        upper_price,
+        whirlpool_address,
         param,
-        slippage_tolerance_bps,
-        None,
-     )
-     .await;
+        Some(100),
+        Some(wallet.pubkey())
+    ).await.unwrap();
 
-    println!("Result: {:?}", result);
+    println!("result: {:?}", instructions);
+
+    println!("Quote token mac B: {:?}", instructions.quote.token_max_b);
+    println!("Initialization cost: {:?}", instructions.initialization_cost);
+    println!("Position mint: {:?}", instructions.position_mint);
+
+
+
+    let mut all_instructions = vec![];
+    all_instructions.extend(instructions.instructions);
+
+    let mut signers: Vec<&dyn Signer> = vec![wallet.as_ref()];
+    signers.extend(
+        instructions
+            .additional_signers
+            .iter()
+            .map(|kp| kp as &dyn Signer),
+    );
+
+    let mut all_instructions = vec![];
+
+    let recent_blockhash = rpc.get_latest_blockhash().await?;
+
+    let compute_unit_instructions = get_compute_unit_instructions(
+        rpc,
+        &instructions,
+        wallet,
+        whirlpool_address,
+        &additional_signers,
+        tier,
+        max_priority_fee,
+        recent_blockhash,
+    )
+    .await?;
+    all_instructions.extend(compute_unit_instructions);
+
+    all_instructions.extend(instructions.clone());
+
+    let message = Message::new(&all_instructions, Some(&wallet.pubkey()));
+    let mut all_signers = vec![wallet];
+    all_signers.extend(additional_signers.clone());
+
+    let transaction = Transaction::new(&all_signers, message, recent_blockhash);
+    let transaction_config = RpcSendTransactionConfig {
+        skip_preflight: true,
+        preflight_commitment: Some(CommitmentLevel::Confirmed),
+        max_retries: Some(0),
+        ..Default::default()
+    };
+    let start_time = Instant::now();
+    let timeout = Duration::from_secs(90);
+
+    let send_transaction_result = loop {
+        if start_time.elapsed() >= timeout {
+            break Err(Box::<dyn std::error::Error>::from("Transaction timed out"));
+        }
+        let signature: Signature = rpc
+            .send_transaction_with_config(&transaction, transaction_config)
+            .await?;
+        let statuses = rpc.get_signature_statuses(&[signature]).await?.value;
+        if let Some(status) = statuses[0].clone() {
+            break Ok((status, signature));
+        }
+        sleep(Duration::from_millis(100)).await;
+    };
+    send_transaction_result.and_then(|(status, signature)| {
+        if let Some(err) = status.err {
+            Err(Box::new(err))
+        } else {
+            Ok(signature)
+        }
+    })
+}
+
+
+
+
+
+    // let whirlpool_pubkey = Pubkey::from_str("8wXA3oeY8EUpmHu2yqzr6k2WJEodTFLuKqTmoQJtM6wP").unwrap();
+    // let lower_price = 1.0;
+    // let upper_price = 1.1;
+
+    // // let liquidity_delta = convert_to_liquidity_delta(1, true)?;
+    // let param = IncreaseLiquidityParam::TokenB(1);
+
+    // let slippage_tolerance_bps = Some(100);
+
+    // // let wallet = Keypair::new();
+    // // let funder = Some(wallet.pubkey());
+    // // funder = Some(wallet.pubkey());
+    // let wallet_pub_key = wallet.pubkey();
+    // let result = open_position_instructions(
+    //     &rpc,
+    //     whirlpool_pubkey,
+    //     lower_price,
+    //     upper_price,
+    //     param,
+    //     slippage_tolerance_bps,
+    //     None,
+    //  )
+    //  .await;
+
+    // println!("Result: {:?}", result);
 
     // println!("Position Mint: {:?}", result.position_mint);
     // println!("Initialization Cost: {} lamports", result.initialization_cost);
