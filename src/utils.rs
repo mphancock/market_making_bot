@@ -181,6 +181,8 @@ pub async fn send_transaction(
     let start_time = Instant::now();
     let timeout = Duration::from_secs(90);
 
+    println!("Transaction: {:?}", transaction);
+
     let send_transaction_result = loop {
         if start_time.elapsed() >= timeout {
             break Err(Box::<dyn std::error::Error>::from("Transaction timed out"));

@@ -3,6 +3,8 @@ mod position_manager;
 mod utils;
 mod wallet;
 
+mod positions;
+
 use clap::Parser;
 use cli::Args;
 use colored::Colorize;
@@ -16,6 +18,8 @@ use std::env;
 use std::str::FromStr;
 use tokio::time::{sleep, Duration};
 
+use positions::open_position;
+
 use utils::{
     display_position_balances, display_wallet_balances, fetch_mint, fetch_position, fetch_whirlpool, send_transaction
 };
@@ -25,6 +29,11 @@ use orca_whirlpools::{
 };
 
 use solana_sdk::signer::Signer;
+
+use std::any::type_name;
+fn type_of<T>(_: &T) -> &'static str {
+    type_name::<T>()
+}
 
 #[tokio::main]
 async fn main() {
@@ -96,92 +105,57 @@ async fn main() {
     set_whirlpools_config_address(WhirlpoolsConfigInput::SolanaDevnet).unwrap();
     let rpc = RpcClient::new("https://api.mainnet-beta.solana.com".to_string());
     // let wallet = load_wallet();
-    let whirlpool_address = Pubkey::from_str("8wXA3oeY8EUpmHu2yqzr6k2WJEodTFLuKqTmoQJtM6wP").unwrap();
-    let param = IncreaseLiquidityParam::TokenA(1);
 
-    let instructions = open_full_range_position_instructions(
+    let whirlpool_address = Pubkey::from_str("8wXA3oeY8EUpmHu2yqzr6k2WJEodTFLuKqTmoQJtM6wP").unwrap();
+
+    open_position(
         &rpc,
         whirlpool_address,
-        param,
-        Some(100),
-        Some(wallet.pubkey())
-    ).await.unwrap();
+        &args,
+        &wallet
+    ).await;
 
-    println!("result: {:?}", instructions);
+    // let param = IncreaseLiquidityParam::TokenA(1);
 
-    println!("Quote token mac B: {:?}", instructions.quote.token_max_b);
-    println!("Initialization cost: {:?}", instructions.initialization_cost);
-    println!("Position mint: {:?}", instructions.position_mint);
+    // let instructions = open_full_range_position_instructions(
+    //     &rpc,
+    //     whirlpool_address,
+    //     param,
+    //     Some(100),
+    //     Some(wallet.pubkey())
+    // ).await.unwrap();
 
+    // println!("result: {:?}", instructions);
 
+    // println!("Quote token mac B: {:?}", instructions.quote.token_max_b);
+    // println!("Initialization cost: {:?}", instructions.initialization_cost);
+    // println!("Position mint: {:?}", instructions.position_mint);
 
-    let mut all_instructions = vec![];
-    all_instructions.extend(instructions.instructions);
+    // println!("Instructions: {:?}", type_of(&instructions));
 
-    let mut signers: Vec<&dyn Signer> = vec![wallet.as_ref()];
-    signers.extend(
-        instructions
-            .additional_signers
-            .iter()
-            .map(|kp| kp as &dyn Signer),
-    );
+    // let mut all_instructions = vec![];
+    // all_instructions.extend(instructions.instructions);
 
-    let mut all_instructions = vec![];
+    // let mut signers: Vec<&dyn Signer> = vec![wallet.as_ref()];
+    // signers.extend(
+    //     instructions
+    //         .additional_signers
+    //         .iter()
+    //         .map(|kp| kp as &dyn Signer),
+    // );
 
-    let recent_blockhash = rpc.get_latest_blockhash().await?;
+    // let signature = send_transaction(
+    //     &rpc,
+    //     wallet.as_ref(),
+    //     &whirlpool_address,
+    //     all_instructions,
+    //     signers,
+    //     args.priority_fee_tier,
+    //     args.max_priority_fee_lamports,
+    // )
+    // .await.unwrap();
 
-    let compute_unit_instructions = get_compute_unit_instructions(
-        rpc,
-        &instructions,
-        wallet,
-        whirlpool_address,
-        &additional_signers,
-        tier,
-        max_priority_fee,
-        recent_blockhash,
-    )
-    .await?;
-    all_instructions.extend(compute_unit_instructions);
-
-    all_instructions.extend(instructions.clone());
-
-    let message = Message::new(&all_instructions, Some(&wallet.pubkey()));
-    let mut all_signers = vec![wallet];
-    all_signers.extend(additional_signers.clone());
-
-    let transaction = Transaction::new(&all_signers, message, recent_blockhash);
-    let transaction_config = RpcSendTransactionConfig {
-        skip_preflight: true,
-        preflight_commitment: Some(CommitmentLevel::Confirmed),
-        max_retries: Some(0),
-        ..Default::default()
-    };
-    let start_time = Instant::now();
-    let timeout = Duration::from_secs(90);
-
-    let send_transaction_result = loop {
-        if start_time.elapsed() >= timeout {
-            break Err(Box::<dyn std::error::Error>::from("Transaction timed out"));
-        }
-        let signature: Signature = rpc
-            .send_transaction_with_config(&transaction, transaction_config)
-            .await?;
-        let statuses = rpc.get_signature_statuses(&[signature]).await?.value;
-        if let Some(status) = statuses[0].clone() {
-            break Ok((status, signature));
-        }
-        sleep(Duration::from_millis(100)).await;
-    };
-    send_transaction_result.and_then(|(status, signature)| {
-        if let Some(err) = status.err {
-            Err(Box::new(err))
-        } else {
-            Ok(signature)
-        }
-    })
-}
-
-
+    // println!("Signature: {:?}", signature);
 
 
 
